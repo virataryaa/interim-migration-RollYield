@@ -18,6 +18,7 @@ the output parquet already exists, same as the ICE original.)
 import datetime
 import logging
 import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)  # silences a harmless lseg.data internal FutureWarning
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s")
