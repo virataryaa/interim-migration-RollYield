@@ -126,5 +126,15 @@ python Code/ingest_lseg.py     # writes both roll_yield_data.parquet and fx_brl.
 streamlit run Dashboard/app.py
 ```
 
+Filters (commodity multiselect, date range) live in the native Streamlit
+sidebar, open by default.
+
+The two cached loaders take the parquet's mtime as a cache-key argument.
+`st.cache_data` keys only on a function's arguments, and the ingest rewrites
+these files in place — without the mtime, a long-running app keeps serving its
+previous load for up to an hour after a rebuild. Note the receiving parameter
+must NOT be underscore-prefixed: Streamlit excludes those from hashing, which
+would silently defeat it.
+
 Requires an authenticated LSEG Workspace/Eikon session on the host running
 the ingest script.

@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from pathlib import Path
 
-st.set_page_config(page_title="Roll Yield Monitor", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Roll Yield Monitor", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""<style>
   [data-testid="stAppViewContainer"],[data-testid="stMain"],.main{background:#fafafa!important;color:#1d1d1f!important}
   [data-testid="stHeader"]{background:transparent!important}
@@ -16,6 +16,9 @@ st.markdown("""<style>
   hr{border:none!important;border-top:1px solid #e8e8ed!important;margin:.4rem 0!important}
   [data-testid="stRadio"] label,[data-testid="stRadio"] label p{color:#1d1d1f!important}
   [data-testid="stExpander"]{border:1px solid #e8e8ed!important;border-radius:8px!important;background:#fff!important}
+  [data-testid="stSidebar"]{background:#f5f5f7!important;border-right:1px solid #e8e8ed!important}
+  [data-testid="stSidebar"] *{color:#1d1d1f!important}
+  [data-testid="stSidebar"] .block-container{padding-top:1.5rem!important}
   h1,h2,h3{color:#1d1d1f!important}
   html,body,[class*="css"]{color:#1d1d1f!important}
 </style>""", unsafe_allow_html=True)
@@ -94,8 +97,20 @@ def _generate_demo():
     return pd.DataFrame(rows)
 
 # ── Load data ─────────────────────────────────────────────────────────────────
+def _stamp(name: str):
+    """mtime of a Database file, or None if absent. Passed into the cached
+    loaders purely as part of their cache key: the daily ingest rewrites these
+    parquets in place, and without the mtime in the key Streamlit keeps serving
+    the previous load until the ttl lapses or the process restarts.
+
+    The receiving param must NOT be underscore-prefixed — Streamlit excludes
+    those from hashing, which would silently defeat the point."""
+    pq = _BASE / name
+    return pq.stat().st_mtime if pq.exists() else None
+
+
 @st.cache_data(ttl=3600)
-def load_data():
+def load_data(stamp):
     pq = _BASE / "roll_yield_data.parquet"
     if pq.exists():
         df = pd.read_parquet(pq)
@@ -103,8 +118,9 @@ def load_data():
         return df, False
     return _generate_demo(), True
 
+
 @st.cache_data(ttl=3600)
-def load_fx():
+def load_fx(stamp):
     """USD/BRL for the diff tab. Optional — returns None if the ingest hasn't
     written it, and the tab hides its BRL panels rather than erroring."""
     pq = _BASE / "fx_brl.parquet"
@@ -115,7 +131,7 @@ def load_fx():
     return fx.set_index("Date")[["USDBRL"]].astype("float64")
 
 
-df, is_demo = load_data()
+df, is_demo = load_data(_stamp("roll_yield_data.parquet"))
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(
@@ -132,21 +148,26 @@ min_d         = df["Date"].min().date()
 max_d         = df["Date"].max().date()
 default_start = (df["Date"].max() - pd.DateOffset(years=3)).date()
 
-with st.expander("Controls", expanded=True):
-    ca, cb = st.columns([3, 5])
-    with ca:
-        sel_comms = st.multiselect(
-            "Commodities",
-            options=COMMS,
-            default=["KC", "RC", "CC"],
-            format_func=lambda x: f"{x} — {NAMES[x]}",
-            key="ms_comms",
-        )
-    with cb:
-        date_range = st.slider(
-            "Date range", min_value=min_d, max_value=max_d,
-            value=(default_start, max_d), key="sl_dates",
-        )
+with st.sidebar:
+    st.markdown(
+        "<div style='font-family:\"Playfair Display\",Georgia,serif;color:#0a2463;"
+        "font-size:1.15rem;margin-bottom:.6rem'>Controls</div>",
+        unsafe_allow_html=True,
+    )
+    sel_comms = st.multiselect(
+        "Commodities",
+        options=COMMS,
+        default=["KC", "RC", "CC"],
+        format_func=lambda x: f"{x} — {NAMES[x]}",
+        key="ms_comms",
+        help="Roll Yield tab only. BMF has its own tab — different units and carry tenor.",
+    )
+    date_range = st.slider(
+        "Date range", min_value=min_d, max_value=max_d,
+        value=(default_start, max_d), key="sl_dates",
+    )
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.caption(f"Data through {max_d.strftime('%d/%m/%Y')}")
 
 start_d, end_d = date_range
 df_fil = df[(df["Date"].dt.date >= start_d) & (df["Date"].dt.date <= end_d)]
@@ -662,7 +683,7 @@ with diff_tab:
         st.markdown("<hr>", unsafe_allow_html=True)
 
         # ── SECTION 3 — BRL (optional: only if the FX parquet exists) ─────────
-        fx = load_fx()
+        fx = load_fx(_stamp("fx_brl.parquet"))
         if fx is None:
             st.caption("USD/BRL panel hidden — Database/fx_brl.parquet not found. "
                        "Run Code/ingest_lseg.py to populate it.")
