@@ -560,47 +560,9 @@ with diff_tab:
         st.warning("No overlapping KC / BMF data in the selected date range.")
     else:
         st.caption(
-            "KC c2 minus BMF c2, both in **US cents/lb** (BMF converted at "
-            "132.2774 lb per 60kg bag). Read as a Brazil differential proxy — "
-            "origin diff, internal logistics, BRL and financing — not as an arb: "
-            "delivery does not cross between B3 and ICE. Front month only."
+            "BMF converted to KC's units: USD/60kg bag ÷ 132.2774 lb/bag × 100 "
+            "= US cents/lb. Diff = KC c2 − BMF c2."
         )
-
-        d_now  = dfd["Diff"].iloc[-1]
-        d_full = df[df["Commodity"] == "KC"].set_index("Date")[["c2"]].join(
-            df[df["Commodity"] == BMF].set_index("Date")[["c2"]],
-            how="inner", lsuffix="_KC", rsuffix="_BMF").astype("float64")
-        d_full = (d_full["c2_KC"] - d_full["c2_BMF"] * 100.0 / LB_PER_BAG).dropna()
-        pctile = float((d_full < d_now).mean() * 100)
-        yr     = dfd["Diff"].tail(252)
-        z      = (d_now - yr.mean()) / yr.std() if yr.std() else np.nan
-        chg20  = d_now - dfd["Diff"].iloc[-21] if len(dfd) > 21 else np.nan
-
-        # ── KPI strip ─────────────────────────────────────────────────────────
-        kpis = [
-            ("KC − BMF",     f"{d_now:+.1f}",   "US cents / lb"),
-            ("Percentile",   f"{pctile:.0f}th", "vs full history"),
-            ("Z-score",      f"{z:+.2f}",       "vs trailing 1yr"),
-            ("20d Change",   f"{chg20:+.1f}",   "cents / lb"),
-            ("1yr Mean",     f"{yr.mean():+.1f}", f"sd {yr.std():.1f}"),
-        ]
-        for col, (label, val, sub) in zip(st.columns(len(kpis)), kpis):
-            with col:
-                st.markdown(
-                    "<div style='background:#fff;border:1px solid #e8e8ed;border-radius:8px;"
-                    "padding:10px 14px'>"
-                    "<div style='font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;"
-                    f"color:#8a8a8f'>{label}</div>"
-                    f"<div style='font-size:1.35rem;font-weight:500;color:{NAVY};margin:2px 0'>{val}</div>"
-                    f"<div style='font-size:.62rem;color:#8a8a8f'>{sub}</div></div>",
-                    unsafe_allow_html=True,
-                )
-        st.markdown(
-            "<div style='font-size:.68rem;color:#8a8a8f;margin-top:6px'>"
-            f"as of {dfd.index[-1].strftime('%d/%m/%Y')} · {len(dfd)} overlapping days in range</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown("<hr>", unsafe_allow_html=True)
 
         # ── SECTION 1 — Diff with mean / sd bands ─────────────────────────────
         st.markdown(lbl("KC − BMF Differential (US cents/lb) · 1yr Mean ±1 / ±2 sd"), unsafe_allow_html=True)
@@ -633,52 +595,24 @@ with diff_tab:
         st.plotly_chart(fig_d, use_container_width=True)
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # ── SECTION 2 — Both legs + seasonality ───────────────────────────────
-        dc1, dc2 = st.columns(2)
-
-        with dc1:
-            st.markdown(lbl("Both Legs · Front Month · US cents/lb"), unsafe_allow_html=True)
-            fig_lg = go.Figure()
-            for nm, col in (("KC", COLORS["KC"]), ("BMF", COMM_CONFIG[BMF]["color"])):
-                fig_lg.add_trace(go.Scatter(
-                    x=dfd.index, y=dfd[nm].round(2), mode="lines", name=nm,
-                    line=dict(color=col, width=1.6),
-                    hovertemplate=f"<b>{nm}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}<extra></extra>"))
-            fig_lg.update_layout(
-                height=330,
-                xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-                yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK),
-                           title="US c/lb"),
-                legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK),
-                            bgcolor="rgba(255,255,255,0.7)"),
-                margin=dict(t=10, b=10, l=4, r=4), **_D,
-            )
-            st.plotly_chart(fig_lg, use_container_width=True)
-
-        with dc2:
-            st.markdown(lbl("Seasonality — Avg Diff by Month"), unsafe_allow_html=True)
-            ds = dfd.copy()
-            ds["Month"] = ds.index.month
-            ds_avg = ds.groupby("Month")["Diff"].mean().reindex(range(1, 13))
-            overall = dfd["Diff"].mean()
-            fig_ds = go.Figure(go.Bar(
-                x=MONTHS, y=ds_avg.values.round(2),
-                marker_color=[NAVY if v >= overall else "#8b1a00" for v in ds_avg.fillna(overall)],
-                text=[f"{v:.1f}" if not np.isnan(v) else "" for v in ds_avg.values],
-                textposition="outside", textfont=dict(size=8, color=BLACK),
-                hovertemplate="<b>%{x}</b><br>Avg diff: %{y:.1f} c/lb<extra></extra>",
-            ))
-            fig_ds.add_hline(y=overall, line_dash="dot", line_color="#aaaaaa", line_width=1,
-                             annotation_text=f"period avg {overall:.1f}",
-                             annotation_font=dict(size=8, color="#8a8a8f"))
-            fig_ds.update_layout(
-                height=330,
-                xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-                yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK),
-                           title="Avg KC − BMF (c/lb)"),
-                margin=dict(t=10, b=10, l=4, r=4), **_D,
-            )
-            st.plotly_chart(fig_ds, use_container_width=True)
+        # ── SECTION 2 — Both legs ─────────────────────────────────────────────
+        st.markdown(lbl("Both Legs · Front Month · US cents/lb"), unsafe_allow_html=True)
+        fig_lg = go.Figure()
+        for nm, col in (("KC", COLORS["KC"]), ("BMF", COMM_CONFIG[BMF]["color"])):
+            fig_lg.add_trace(go.Scatter(
+                x=dfd.index, y=dfd[nm].round(2), mode="lines", name=nm,
+                line=dict(color=col, width=1.6),
+                hovertemplate=f"<b>{nm}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}<extra></extra>"))
+        fig_lg.update_layout(
+            height=330,
+            xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
+            yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK),
+                       title="US c/lb"),
+            legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK),
+                        bgcolor="rgba(255,255,255,0.7)"),
+            margin=dict(t=10, b=10, l=4, r=4), **_D,
+        )
+        st.plotly_chart(fig_lg, use_container_width=True)
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
