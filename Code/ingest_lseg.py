@@ -35,6 +35,9 @@ FX_OUT     = Path(__file__).parent.parent / "Database" / "fx_brl.parquet"
 FX_RIC     = "BRL="
 TODAY      = datetime.date.today().isoformat()
 FULL_START = "2016-01-01"
+# Max consecutive days a curve leg may be linearly filled across. See the
+# note in _fetch_curve — this is what stops thin legs inventing long ramps.
+INTERP_LIMIT = 5
 
 # (key, name, spot_idx, yr1_idx, LSEG continuation root)
 # spot_idx/yr1_idx are 1-based curve positions (c<idx>), carried over
@@ -123,9 +126,20 @@ def _fetch_curve(ld, root: str, start: str) -> dict:
     # leg actually has, then linearly interpolate strictly-internal holes
     # (never extrapolating past a leg's own first/last real print) — same
     # treatment used in the Rollex migration for the same underlying issue.
+    #
+    # INTERP_LIMIT caps how far that fill will reach. Without it, a thin leg
+    # that stops printing for months gets a single straight line drawn across
+    # the whole dead patch, which reads on a chart as a real, calm trend. B3
+    # coffee (ICF) is the worst case: ICFc5 has gone 187 days between prints,
+    # and uncapped filling made ~48% of BMF's series part of a synthetic run
+    # of 10+ consecutive invented days. Capping turns those into visible gaps.
+    # Cost elsewhere is near zero (0-0.6% of rows for eight of the twelve;
+    # JO 3.1%, CT 12.5%, BMF 30% — and in each of those the dropped rows are
+    # exactly the fabricated stretches).
     full_idx = sorted(set().union(*(s.index for s in out.values())))
     for n in list(out.keys()):
-        out[n] = out[n].reindex(full_idx).interpolate(method="linear", limit_area="inside")
+        out[n] = out[n].reindex(full_idx).interpolate(
+            method="linear", limit_area="inside", limit=INTERP_LIMIT)
     return out
 
 

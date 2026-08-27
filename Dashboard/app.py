@@ -71,6 +71,18 @@ def lbl(text):
             f"margin-bottom:8px'><span style='font-size:.78rem;font-weight:500;"
             f"letter-spacing:.07em;text-transform:uppercase;color:#dde4f0'>{text}</span></div>")
 
+def on_session_axis(frame, dates):
+    """Reindex onto the full set of session dates so missing days become NaN.
+
+    The ingest drops days where a curve leg had no usable print, so those rows
+    are simply absent from the parquet. Plotting the frame as-is would join the
+    points either side of a gap with a straight line — visually identical to
+    the invented ramps the ingest's interpolation cap exists to prevent. NaN
+    rows make plotly break the line instead (traces must not set connectgaps).
+    """
+    return frame.reindex(dates)
+
+
 # ── Demo data generator ───────────────────────────────────────────────────────
 def _generate_demo():
     dates = pd.bdate_range("2020-01-01", pd.Timestamp.today())
@@ -160,7 +172,7 @@ with st.sidebar:
         default=["KC", "RC", "CC"],
         format_func=lambda x: f"{x} — {NAMES[x]}",
         key="ms_comms",
-        help="Roll Yield tab only. BMF has its own tab — different units and carry tenor.",
+        help="Roll Yield tab only. BMF has its own tab — different units and roll-yield tenor.",
     )
     date_range = st.slider(
         "Date range", min_value=min_d, max_value=max_d,
@@ -171,6 +183,12 @@ with st.sidebar:
 
 start_d, end_d = date_range
 df_fil = df[(df["Date"].dt.date >= start_d) & (df["Date"].dt.date <= end_d)]
+
+# KC prints every session, so its dates are the natural "market open" axis to
+# hang the thinner series off when showing where they genuinely have no data.
+SESSION_DATES = (
+    df_fil[df_fil["Commodity"] == "KC"]["Date"].drop_duplicates().sort_values()
+)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 ry_tab, bmf_tab, diff_tab = st.tabs(["Roll Yield", "BMF Arabica", "KC vs BMF Diff"])
@@ -388,7 +406,7 @@ with bmf_tab:
 
         st.caption(
             "B3/BM&F Arabica Coffee (ICF) — 100 bags x 60kg per lot, quoted USD per 60kg bag, "
-            "H/K/N/U/Z months. Carry shown here is a **6-month** figure (c2 vs c5), not the "
+            "H/K/N/U/Z months. Roll yield shown here is a **6-month** figure (c2 vs c5), not the "
             "1-year measure used on the other two tabs: B3's curve is only genuinely liquid "
             "out to about c5."
         )
@@ -399,7 +417,7 @@ with bmf_tab:
         ann_lot  = last["roll_spread"] * b_mult * b_rolls
         kpis = [
             ("Front (c1)",        f"{last['c1']:,.2f}",                    "USD / 60kg bag"),
-            ("6m Carry",          f"{last['Roll_Yield_1yr'] * 100:+.1f}%", "c2 / c5 - 1"),
+            ("6m Roll Yield",     f"{last['Roll_Yield_1yr'] * 100:+.1f}%", "c2 / c5 - 1"),
             ("Percentile",        f"{pctile:.0f}th",                       "vs full history"),
             ("Roll Spread c2-c1", f"{last['roll_spread']:+.2f}",           "USD / bag"),
             ("Roll Cost / Lot",   f"${last['roll_spread'] * b_mult:+,.0f}", f"annualised ${ann_lot:+,.0f}"),
@@ -423,9 +441,10 @@ with bmf_tab:
         st.markdown("<hr>", unsafe_allow_html=True)
 
         # ── SECTION 1 — 6m carry over time ────────────────────────────────────
-        st.markdown(lbl("BMF Arabica 6-Month Carry (%) — c2 / c5 − 1"), unsafe_allow_html=True)
+        st.markdown(lbl("BMF Arabica 6-Month Roll Yield (%) — c2 / c5 − 1"), unsafe_allow_html=True)
+        b_ax = on_session_axis(b.set_index("Date"), SESSION_DATES)
         fig_b = go.Figure(go.Scatter(
-            x=b["Date"], y=(b["Roll_Yield_1yr"] * 100).round(2),
+            x=b_ax.index, y=(b_ax["Roll_Yield_1yr"] * 100).round(2),
             mode="lines", line=dict(color=b_color, width=1.8),
             hovertemplate="<b>BMF</b>  %{x|%d %b %Y}  %{y:.1f}%<extra></extra>",
         ))
@@ -434,7 +453,7 @@ with bmf_tab:
             height=340,
             xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
             yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK),
-                       ticksuffix="%", title="6m Carry (%)"),
+                       ticksuffix="%", title="6m Roll Yield (%)"),
             margin=dict(t=10, b=10, l=4, r=4), **_D,
         )
         st.plotly_chart(fig_b, use_container_width=True)
@@ -501,8 +520,8 @@ with bmf_tab:
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # ── SECTION 3 — Carry heatmap ─────────────────────────────────────────
-        st.markdown(lbl("BMF 6-Month Carry Heatmap · Monthly Avg"), unsafe_allow_html=True)
+        # ── SECTION 3 — Roll yield heatmap ────────────────────────────────────
+        st.markdown(lbl("BMF 6-Month Roll Yield Heatmap · Monthly Avg"), unsafe_allow_html=True)
         bh = b.copy()
         bh["Year"], bh["Month"] = bh["Date"].dt.year, bh["Date"].dt.month
         bp = (
@@ -520,10 +539,10 @@ with bmf_tab:
                 texttemplate="%{text}", textfont=dict(size=8, color=BLACK),
                 colorscale=[[0.0,"#8b0000"],[0.4,"#f5c6cb"],[0.5,"#ffffff"],[0.6,"#d4edda"],[1.0,"#1a6b1a"]],
                 zmid=0,
-                colorbar=dict(title=dict(text="6m Carry %", font=dict(size=9, color=BLACK)),
+                colorbar=dict(title=dict(text="6m Roll Yield %", font=dict(size=9, color=BLACK)),
                               tickfont=dict(size=8, color=BLACK), ticksuffix="%", thickness=12, len=0.8),
                 hoverongaps=False,
-                hovertemplate="<b>%{y} · %{x}</b><br>Avg 6m Carry: %{z:.1f}%<extra></extra>",
+                hovertemplate="<b>%{y} · %{x}</b><br>Avg 6m Roll Yield: %{z:.1f}%<extra></extra>",
             ))
             fig_bh.update_layout(
                 height=max(300, len(bp.index) * 28),
@@ -555,15 +574,16 @@ with diff_tab:
     dfd["KC"]   = dfd["c2_KC"]
     dfd["Diff"] = dfd["KC"] - dfd["BMF"]
 
-    # Like-for-like carry. Both contracts roll H/K/N/U/Z, so c2->c5 is three
+    # Like-for-like roll yield. Both contracts roll H/K/N/U/Z, so c2->c5 is three
     # contract gaps (~7.2 months) on BOTH — unlike the Roll Yield tab, which
     # measures KC at c2/c7 (~12m) and so is not comparable to BMF at all.
     # Carry is a ratio, so no unit conversion is needed here.
     dfd["KC_carry"]  = dfd["c2_KC"]  / dfd["c5_KC"]  - 1
     dfd["BMF_carry"] = dfd["c2_BMF"] / dfd["c5_BMF"] - 1
-    dfd["CarrySprd"] = dfd["KC_carry"] - dfd["BMF_carry"]
 
     dfd = dfd.dropna(subset=["Diff"]).sort_index()
+
+    dfd_ax = on_session_axis(dfd, SESSION_DATES)
 
     if dfd.empty:
         st.warning("No overlapping KC / BMF data in the selected date range.")
@@ -579,16 +599,16 @@ with diff_tab:
         roll_s  = dfd["Diff"].rolling(252, min_periods=60).std()
         fig_d   = go.Figure()
         for mult, shade in ((2, "rgba(10,36,99,0.06)"), (1, "rgba(10,36,99,0.10)")):
-            fig_d.add_trace(go.Scatter(x=dfd.index, y=roll_m + mult * roll_s, mode="lines",
+            fig_d.add_trace(go.Scatter(x=dfd_ax.index, y=(roll_m + mult * roll_s).reindex(SESSION_DATES), mode="lines",
                                        line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig_d.add_trace(go.Scatter(x=dfd.index, y=roll_m - mult * roll_s, mode="lines",
+            fig_d.add_trace(go.Scatter(x=dfd_ax.index, y=(roll_m - mult * roll_s).reindex(SESSION_DATES), mode="lines",
                                        line=dict(width=0), fill="tonexty", fillcolor=shade,
                                        name=f"±{mult} sd", hoverinfo="skip"))
         fig_d.add_trace(go.Scatter(
-            x=dfd.index, y=roll_m, mode="lines", name="1yr mean",
+            x=dfd_ax.index, y=roll_m.reindex(SESSION_DATES), mode="lines", name="1yr mean",
             line=dict(color="#8a8a8f", width=1, dash="dot"), hoverinfo="skip"))
         fig_d.add_trace(go.Scatter(
-            x=dfd.index, y=dfd["Diff"].round(2), mode="lines", name="KC − BMF",
+            x=dfd_ax.index, y=dfd_ax["Diff"].round(2), mode="lines", name="KC − BMF",
             line=dict(color=NAVY, width=1.8),
             hovertemplate="%{x|%d %b %Y}  %{y:.1f} c/lb<extra></extra>"))
         fig_d.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
@@ -609,7 +629,7 @@ with diff_tab:
         fig_lg = go.Figure()
         for nm, col in (("KC", COLORS["KC"]), ("BMF", COMM_CONFIG[BMF]["color"])):
             fig_lg.add_trace(go.Scatter(
-                x=dfd.index, y=dfd[nm].round(2), mode="lines", name=nm,
+                x=dfd_ax.index, y=dfd_ax[nm].round(2), mode="lines", name=nm,
                 line=dict(color=col, width=1.6),
                 hovertemplate=f"<b>{nm}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}<extra></extra>"))
         fig_lg.update_layout(
@@ -624,62 +644,36 @@ with diff_tab:
         st.plotly_chart(fig_lg, use_container_width=True)
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # ── SECTION 3 — Like-for-like carry ───────────────────────────────────
-        car = dfd.dropna(subset=["CarrySprd"])
+        # ── SECTION 3 — Like-for-like roll yield ──────────────────────────────
+        car = dfd.dropna(subset=["KC_carry", "BMF_carry"])
+        car_ax = on_session_axis(car, SESSION_DATES)
         if not car.empty:
-            st.markdown(lbl("Carry Spread · KC c2/c5 vs BMF c2/c5 — Like-for-Like ~7.2m"),
+            st.markdown(lbl("Roll Yield · KC c2/c5 vs BMF c2/c5 — Like-for-Like ~7.2m"),
                         unsafe_allow_html=True)
             st.caption(
                 "Both roll H/K/N/U/Z, so c2→c5 is three contract gaps on each — the "
-                "same tenor. Carry is a ratio, so no unit conversion applies. This is "
+                "same tenor. Roll yield is a ratio, so no unit conversion applies. It is "
                 "close to orthogonal to the price differential above (r ≈ 0.14): the "
                 "diff says how cheap Brazil is, this says which market is tighter."
             )
-            cc1, cc2 = st.columns(2)
-
-            with cc1:
-                fig_cy = go.Figure()
-                for nm, lab, col in (("KC_carry", "KC", COLORS["KC"]),
-                                     ("BMF_carry", "BMF", COMM_CONFIG[BMF]["color"])):
-                    fig_cy.add_trace(go.Scatter(
-                        x=car.index, y=(car[nm] * 100).round(2), mode="lines", name=lab,
-                        line=dict(color=col, width=1.6),
-                        hovertemplate=f"<b>{lab}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}%<extra></extra>"))
-                fig_cy.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
-                fig_cy.update_layout(
-                    title=dict(text="Both Carries (c2/c5 − 1)", font=dict(size=11, color=BLACK),
-                               x=0.5, xanchor="center"),
-                    height=330,
-                    xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-                    yaxis=dict(showgrid=True, gridcolor="#f0f0f0", ticksuffix="%",
-                               tickfont=dict(size=9, color=BLACK), title="Carry (%)"),
-                    legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK),
-                                bgcolor="rgba(255,255,255,0.7)"),
-                    margin=dict(t=35, b=10, l=4, r=4), **_D,
-                )
-                st.plotly_chart(fig_cy, use_container_width=True)
-
-            with cc2:
-                cs = (car["CarrySprd"] * 100).round(2)
-                fig_cs = go.Figure(go.Scatter(
-                    x=car.index, y=cs, mode="lines",
-                    line=dict(color=NAVY, width=1.8),
-                    hovertemplate="%{x|%d %b %Y}  %{y:+.1f} pp<extra></extra>"))
-                fig_cs.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
-                fig_cs.add_hline(y=cs.mean(), line_dash="dash", line_color="#8a8a8f", line_width=1,
-                                 annotation_text=f"period avg {cs.mean():+.1f} pp",
-                                 annotation_font=dict(size=8, color="#8a8a8f"))
-                fig_cs.update_layout(
-                    title=dict(text="KC carry − BMF carry  (+ = KC tighter)",
-                               font=dict(size=11, color=BLACK), x=0.5, xanchor="center"),
-                    height=330,
-                    xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-                    yaxis=dict(showgrid=True, gridcolor="#f0f0f0", ticksuffix="pp",
-                               tickfont=dict(size=9, color=BLACK), title="Spread (pp)"),
-                    margin=dict(t=35, b=10, l=4, r=4), **_D,
-                )
-                st.plotly_chart(fig_cs, use_container_width=True)
-
+            fig_cy = go.Figure()
+            for nm, lab, col in (("KC_carry", "KC", COLORS["KC"]),
+                                 ("BMF_carry", "BMF", COMM_CONFIG[BMF]["color"])):
+                fig_cy.add_trace(go.Scatter(
+                    x=car_ax.index, y=(car_ax[nm] * 100).round(2), mode="lines", name=lab,
+                    line=dict(color=col, width=1.6),
+                    hovertemplate=f"<b>{lab}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}%<extra></extra>"))
+            fig_cy.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
+            fig_cy.update_layout(
+                height=360,
+                xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
+                yaxis=dict(showgrid=True, gridcolor="#f0f0f0", ticksuffix="%",
+                           tickfont=dict(size=9, color=BLACK), title="Roll Yield (%)"),
+                legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK),
+                            bgcolor="rgba(255,255,255,0.7)"),
+                margin=dict(t=10, b=10, l=4, r=4), **_D,
+            )
+            st.plotly_chart(fig_cy, use_container_width=True)
             st.markdown("<hr>", unsafe_allow_html=True)
 
         # ── SECTION 4 — BRL (optional: only if the FX parquet exists) ─────────
@@ -689,6 +683,7 @@ with diff_tab:
                        "Run Code/ingest_lseg.py to populate it.")
         else:
             dfx = dfd[["Diff"]].join(fx, how="inner").dropna()
+            dfx_ax = on_session_axis(dfx, SESSION_DATES)
             if len(dfx) < 60:
                 st.caption("Not enough overlapping USD/BRL data in this range for the BRL panels.")
             else:
@@ -698,11 +693,11 @@ with diff_tab:
                     st.markdown(lbl("Diff vs USD/BRL — Dual Axis"), unsafe_allow_html=True)
                     fig_fx = go.Figure()
                     fig_fx.add_trace(go.Scatter(
-                        x=dfx.index, y=dfx["Diff"].round(2), name="KC − BMF",
+                        x=dfx_ax.index, y=dfx_ax["Diff"].round(2), name="KC − BMF",
                         mode="lines", line=dict(color=NAVY, width=1.6),
                         hovertemplate="%{x|%d %b %Y}  %{y:.1f} c/lb<extra></extra>"))
                     fig_fx.add_trace(go.Scatter(
-                        x=dfx.index, y=dfx["USDBRL"].round(3), name="USD/BRL",
+                        x=dfx_ax.index, y=dfx_ax["USDBRL"].round(3), name="USD/BRL",
                         mode="lines", line=dict(color="#1a6b1a", width=1.4), yaxis="y2",
                         hovertemplate="%{x|%d %b %Y}  %{y:.3f}<extra></extra>"))
                     fig_fx.update_layout(

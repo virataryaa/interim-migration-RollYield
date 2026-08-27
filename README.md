@@ -37,7 +37,7 @@ checked empirically over 2020-2026:
 |---|---|---|---|---|
 | RC (Robusta) | c8 | ~42% | **c6** | ~91% |
 | JO (Orange Juice) | c7 | ~3.5% | **c4** | ~64% |
-| BMF (B3 Arabica) | c7 (by analogy to KC) | ~6% | **c5** — deliberately a 6m carry | ~99% (filled) |
+| BMF (B3 Arabica) | c7 (by analogy to KC) | ~6% | **c5** — deliberately a 6m roll yield | **35% on real prints** (see below) |
 
 Every other commodity's OneYr index (KC c7, CC c7, LCC c7, SB c5, CT c7, W
 c6, ZC c6, ZW c6, KE c6) has 75–99.5% density on LSEG and was kept unchanged.
@@ -88,6 +88,51 @@ and bridges the gap with `connectgaps`. `build()` never extrapolates past a
 leg's last real print, so BMF's series can also end a few days behind the
 other eleven commodities. The BMF tab reads its own latest row, so it is
 unaffected; it is simply absent from tabs 1-2 by construction.
+
+### Interpolation cap — read this before trusting BMF or CT
+
+`_fetch_curve` linearly fills internal gaps in each curve leg. Until Aug-2026
+that fill was **unlimited**, so a thin leg that stopped printing for months got
+a single straight line drawn across the entire dead patch. On a chart that
+reads as a real, calm trend. It is not: it is one interpolation.
+
+B3 coffee is the worst case. Measured against raw prints:
+
+| | share of rows where the leg is a REAL print |
+|---|---|
+| `ICFc2` | 74.6% |
+| `ICFc5` | 43.0% |
+| **both legs real (roll yield is genuine)** | **35.5%** |
+
+`ICFc5` has gone **187 days** between prints. Uncapped, ~48% of BMF's series
+sat inside a synthetic run of 10+ consecutive invented days, including a
+129-row straight ramp across Mar–Sep 2024.
+
+`INTERP_LIMIT = 5` now caps the fill at five days. Impact of the cap, full
+rebuild:
+
+| | rows lost |
+|---|---|
+| KC, RC, SB, ZC, ZW, KE, W, LCC | 0.0–0.1% |
+| CC | 0.6% |
+| JO | 3.1% |
+| **CT** | **13.8%** |
+| **BMF** | **41.3%** |
+
+For CT and BMF those dropped rows *are* the fabricated stretches. CT was
+quietly affected too and had not been noticed before.
+
+No tenor rescues BMF — on real prints `c2/c3` is 40%, `c2/c4` 33%, `c2/c5`
+35%, `c2/c6` 20%, and a weekly resample only reaches ~54%. B3's deferred
+coffee simply does not trade most days. **BMF's roll yield is an
+intermittent series, not a daily one**, and the dashboard now draws it with
+visible gaps rather than filling them.
+
+Because the ingest drops unusable rows entirely, the dashboard reindexes the
+thin series onto `SESSION_DATES` (KC's dates — KC prints every session) via
+`on_session_axis()`. Without that, plotly would join the points either side of
+a gap with a straight line and reintroduce exactly the artefact the cap
+removes. Traces on that axis must not set `connectgaps`.
 
 ### KC vs BMF Diff tab (added Aug-2026)
 
