@@ -547,13 +547,22 @@ with diff_tab:
 
     LB_PER_BAG = 60 / 0.45359237     # 60kg bag -> lbs (132.2774)
 
-    kc_ = df_fil[df_fil["Commodity"] == "KC"].set_index("Date")[["c1", "c2"]]
-    bm_ = df_fil[df_fil["Commodity"] == BMF].set_index("Date")[["c1", "c2"]]
+    kc_ = df_fil[df_fil["Commodity"] == "KC"].set_index("Date")[["c1", "c2", "c5"]]
+    bm_ = df_fil[df_fil["Commodity"] == BMF].set_index("Date")[["c1", "c2", "c5"]]
     dfd = kc_.join(bm_, how="inner", lsuffix="_KC", rsuffix="_BMF").astype("float64")
     # BMF: USD per 60kg bag -> US cents per lb, putting both legs on KC's units.
     dfd["BMF"]  = dfd["c2_BMF"] * 100.0 / LB_PER_BAG
     dfd["KC"]   = dfd["c2_KC"]
     dfd["Diff"] = dfd["KC"] - dfd["BMF"]
+
+    # Like-for-like carry. Both contracts roll H/K/N/U/Z, so c2->c5 is three
+    # contract gaps (~7.2 months) on BOTH — unlike the Roll Yield tab, which
+    # measures KC at c2/c7 (~12m) and so is not comparable to BMF at all.
+    # Carry is a ratio, so no unit conversion is needed here.
+    dfd["KC_carry"]  = dfd["c2_KC"]  / dfd["c5_KC"]  - 1
+    dfd["BMF_carry"] = dfd["c2_BMF"] / dfd["c5_BMF"] - 1
+    dfd["CarrySprd"] = dfd["KC_carry"] - dfd["BMF_carry"]
+
     dfd = dfd.dropna(subset=["Diff"]).sort_index()
 
     if dfd.empty:
@@ -613,10 +622,67 @@ with diff_tab:
             margin=dict(t=10, b=10, l=4, r=4), **_D,
         )
         st.plotly_chart(fig_lg, use_container_width=True)
-
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # ── SECTION 3 — BRL (optional: only if the FX parquet exists) ─────────
+        # ── SECTION 3 — Like-for-like carry ───────────────────────────────────
+        car = dfd.dropna(subset=["CarrySprd"])
+        if not car.empty:
+            st.markdown(lbl("Carry Spread · KC c2/c5 vs BMF c2/c5 — Like-for-Like ~7.2m"),
+                        unsafe_allow_html=True)
+            st.caption(
+                "Both roll H/K/N/U/Z, so c2→c5 is three contract gaps on each — the "
+                "same tenor. Carry is a ratio, so no unit conversion applies. This is "
+                "close to orthogonal to the price differential above (r ≈ 0.14): the "
+                "diff says how cheap Brazil is, this says which market is tighter."
+            )
+            cc1, cc2 = st.columns(2)
+
+            with cc1:
+                fig_cy = go.Figure()
+                for nm, lab, col in (("KC_carry", "KC", COLORS["KC"]),
+                                     ("BMF_carry", "BMF", COMM_CONFIG[BMF]["color"])):
+                    fig_cy.add_trace(go.Scatter(
+                        x=car.index, y=(car[nm] * 100).round(2), mode="lines", name=lab,
+                        line=dict(color=col, width=1.6),
+                        hovertemplate=f"<b>{lab}</b>  %{{x|%d %b %Y}}  %{{y:.1f}}%<extra></extra>"))
+                fig_cy.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
+                fig_cy.update_layout(
+                    title=dict(text="Both Carries (c2/c5 − 1)", font=dict(size=11, color=BLACK),
+                               x=0.5, xanchor="center"),
+                    height=330,
+                    xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
+                    yaxis=dict(showgrid=True, gridcolor="#f0f0f0", ticksuffix="%",
+                               tickfont=dict(size=9, color=BLACK), title="Carry (%)"),
+                    legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK),
+                                bgcolor="rgba(255,255,255,0.7)"),
+                    margin=dict(t=35, b=10, l=4, r=4), **_D,
+                )
+                st.plotly_chart(fig_cy, use_container_width=True)
+
+            with cc2:
+                cs = (car["CarrySprd"] * 100).round(2)
+                fig_cs = go.Figure(go.Scatter(
+                    x=car.index, y=cs, mode="lines",
+                    line=dict(color=NAVY, width=1.8),
+                    hovertemplate="%{x|%d %b %Y}  %{y:+.1f} pp<extra></extra>"))
+                fig_cs.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
+                fig_cs.add_hline(y=cs.mean(), line_dash="dash", line_color="#8a8a8f", line_width=1,
+                                 annotation_text=f"period avg {cs.mean():+.1f} pp",
+                                 annotation_font=dict(size=8, color="#8a8a8f"))
+                fig_cs.update_layout(
+                    title=dict(text="KC carry − BMF carry  (+ = KC tighter)",
+                               font=dict(size=11, color=BLACK), x=0.5, xanchor="center"),
+                    height=330,
+                    xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
+                    yaxis=dict(showgrid=True, gridcolor="#f0f0f0", ticksuffix="pp",
+                               tickfont=dict(size=9, color=BLACK), title="Spread (pp)"),
+                    margin=dict(t=35, b=10, l=4, r=4), **_D,
+                )
+                st.plotly_chart(fig_cs, use_container_width=True)
+
+            st.markdown("<hr>", unsafe_allow_html=True)
+
+        # ── SECTION 4 — BRL (optional: only if the FX parquet exists) ─────────
         fx = load_fx(_stamp("fx_brl.parquet"))
         if fx is None:
             st.caption("USD/BRL panel hidden — Database/fx_brl.parquet not found. "
@@ -678,7 +744,7 @@ with diff_tab:
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
-        # ── SECTION 4 — Diff heatmap ──────────────────────────────────────────
+        # ── SECTION 5 — Diff heatmap ──────────────────────────────────────────
         st.markdown(lbl("KC − BMF Differential Heatmap · Monthly Avg (US cents/lb)"), unsafe_allow_html=True)
         dh = dfd.copy()
         dh["Year"], dh["Month"] = dh.index.year, dh.index.month

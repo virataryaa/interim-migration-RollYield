@@ -110,6 +110,21 @@ What the history says (2016-02 to 2026-08, 2,545 overlapping days):
 | AR(1) half-life | **~8 business days** |
 | sd, 2017-19 -> 2024-26 | 2.5-3.5 -> **8-10** (materially looser since 2020) |
 
+**Like-for-like carry panel.** The tab also compares `KC c2/c5` against
+`BMF c2/c5`. Both contracts roll H/K/N/U/Z, so `c2 -> c5` is three contract
+gaps (~7.2 months) on *each* — the same tenor. This matters: the Roll Yield
+tab measures KC at `c2/c7` (~12 months), so KC's headline carry there is
+**not** comparable to BMF's, and pairing them would show a ~0.5pp gap that is
+pure tenor rather than any market difference (KC's own c2/c7 and c2/c5 differ
+by -0.53% on average). Carry is a ratio, so no unit conversion applies.
+
+Full history (n=2,545): KC c2/c5 averages -1.18% (sd 5.36%), BMF -0.47% (sd
+7.68%), correlation 0.86. The spread averages -0.71% with an ~11 business-day
+AR(1) half-life. It is close to **orthogonal to the price differential**
+(r = 0.14 on levels, 0.19 on changes) — so it is genuinely separate
+information, not a repackaging: the diff says how cheap Brazil is, the carry
+spread says which market is tighter.
+
 **On the BRL panel — read it with low expectations.** Correlating *daily
 changes* (not levels: both series are persistent enough that a level
 correlation would mostly report trend), the full-period r is only **−0.13**,
