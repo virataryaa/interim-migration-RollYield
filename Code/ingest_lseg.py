@@ -10,6 +10,9 @@ RICs are the direct equivalent, so no re-derivation was needed).
 Output: ../Database/roll_yield_data.parquet
 Schema: Date, Commodity, Spot, OneYr, Roll_Yield_1yr, c1-c8
 
+Also writes ../Database/fx_brl.parquet (Date, USDBRL) — used only by the
+dashboard's KC-vs-BMF diff tab, and treated as optional there.
+
 Usage:
     python ingest_lseg.py
 (mode — full history vs incremental upsert — is auto-detected from whether
@@ -25,6 +28,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 log = logging.getLogger(__name__)
 
 OUT        = Path(__file__).parent.parent / "Database" / "roll_yield_data.parquet"
+# USD/BRL, kept in its own file rather than shoehorned into the c1-c8 schema.
+# Only consumer is the dashboard's KC-vs-BMF diff tab, which treats it as
+# optional — if this parquet is missing the tab just drops the BRL panels.
+FX_OUT     = Path(__file__).parent.parent / "Database" / "fx_brl.parquet"
+FX_RIC     = "BRL="
 TODAY      = datetime.date.today().isoformat()
 FULL_START = "2016-01-01"
 
@@ -38,6 +46,17 @@ FULL_START = "2016-01-01"
 # RC's OneYr from c8 to c6 (~91% dense) and JO's from c7 to c4 (~64% dense,
 # the best available beyond c3 — still the weakest point in this dataset and
 # worth treating JO's Roll_Yield_1yr with more caution than the rest).
+#
+# BMF (B3/BM&F Arabica, root ICF — NOT IFC) is deliberately NOT a 1yr number.
+# It rolls on the same five months as KC (H/K/N/U/Z), so the 1yr point from
+# c2 would be c7 — but ICFc7 has no prints before Mar-2023 and is ~30% dense
+# even after gap-filling. B3's curve is only genuinely liquid out to ~c5, so
+# BMF is quoted here as a **6-month carry** instead. c5 is ~7.2m out from c2
+# (99% dense, 2024+ 99.2%); c4 is ~4.8m and closer to a literal 6m but sits
+# stale for weeks at a time (last print 23-Jul vs c5's 19-Aug as of Aug-2026),
+# so c5 is the better-behaved side of the 6m mark. Its Roll_Yield_1yr column
+# keeps the shared schema name but the dashboard labels it as 6-month.
+# Quoted in USD per 60kg bag, 100 bags/lot (see lot_mult in the dashboard).
 COMMODITIES = [
     ("KC",  "Arabica",     2, 7, "KC"),
     ("RC",  "Robusta",     2, 6, "LRC"),
@@ -50,6 +69,7 @@ COMMODITIES = [
     ("ZW",  "Wheat",       1, 6, "W"),
     ("KE",  "KC Wheat",    1, 6, "KW"),
     ("JO",  "OJ",          2, 4, "OJ"),
+    ("BMF", "BMF Arabica", 2, 5, "ICF"),   # ~6m carry, not 1yr — see note above
 ]
 
 
@@ -107,6 +127,40 @@ def _fetch_curve(ld, root: str, start: str) -> dict:
     for n in list(out.keys()):
         out[n] = out[n].reindex(full_idx).interpolate(method="linear", limit_area="inside")
     return out
+
+
+def fx_brl(ld, start: str) -> pd.DataFrame:
+    """USD/BRL daily mid. Returns empty on failure — the FX leg is a nice-to-have
+    for the diff tab and must never take the whole ingest down with it."""
+    try:
+        d = ld.get_history(universe=[FX_RIC], fields=["MID_PRICE"], start=start,
+                           end=TODAY, interval="daily", count=10000)
+    except Exception as e:
+        log.warning(f"  {FX_RIC}: {e} — skipping FX")
+        return pd.DataFrame()
+    if d is None or d.empty:
+        log.warning(f"  {FX_RIC}: no data — skipping FX")
+        return pd.DataFrame()
+    if isinstance(d.columns, pd.MultiIndex):
+        d.columns = [c[0] for c in d.columns]
+    out = d.iloc[:, 0].dropna().rename("USDBRL").to_frame()
+    out.index.name = "Date"
+    out = out.reset_index()
+    log.info(f"  USD/BRL: {len(out)} rows | last = {out['USDBRL'].iloc[-1]:.4f}")
+    return out
+
+
+def save_fx(new: pd.DataFrame):
+    if new.empty:
+        return
+    if FX_OUT.exists():
+        old = pd.read_parquet(FX_OUT)
+        old["Date"] = pd.to_datetime(old["Date"])
+        old = old[old["Date"] < new["Date"].min()]
+        new = pd.concat([old, new], ignore_index=True)
+    new = new.sort_values("Date").drop_duplicates("Date", keep="last")
+    new.to_parquet(FX_OUT, index=False)
+    log.info(f"Saved {len(new):,} FX rows -> {FX_OUT}")
 
 
 def build(ld, start: str) -> pd.DataFrame:
@@ -168,8 +222,12 @@ if __name__ == "__main__":
     try:
         start, incremental = _start()
         new = build(ld, start)
+        log.info("USD/BRL")
+        fx = fx_brl(ld, FULL_START if not FX_OUT.exists() else start)
     finally:
         ld.close_session()
+
+    save_fx(fx)
 
     if new.empty:
         log.error("Nothing to save — exiting with error")
