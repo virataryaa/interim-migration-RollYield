@@ -37,7 +37,7 @@ checked empirically over 2020-2026:
 |---|---|---|---|---|
 | RC (Robusta) | c8 | ~42% | **c6** | ~91% |
 | JO (Orange Juice) | c7 | ~3.5% | **c4** | ~64% |
-| BMF (B3 Arabica) | c7 (by analogy to KC) | ~6% | **c5** — deliberately a 6m roll yield | **35% on real prints** (see below) |
+| BMF (B3 Arabica) | c7 (unusable even on SETTLE: 642 days) | — | **c5** — deliberately a 6m roll yield | **2,638 real settlement days** |
 
 Every other commodity's OneYr index (KC c7, CC c7, LCC c7, SB c5, CT c7, W
 c6, ZC c6, ZW c6, KE c6) has 75–99.5% density on LSEG and was kept unchanged.
@@ -57,82 +57,90 @@ The LSEG continuation root is **`ICF`**, not `IFC` — `IFCc1` returns
 BMF is **deliberately not a 1-year number**, and it lives on its own third
 dashboard tab rather than in the cross-commodity charts. B3 Arabica rolls on
 the same five months as KC (H/K/N/U/Z), so the 1yr point from c2 would be c7
-— but `ICFc7` has no prints before Mar-2023 and is only ~30% dense even after
-gap-filling. B3's curve is genuinely liquid only to about c5, so BMF is
-quoted here as a **6-month carry (c2 vs c5)** instead:
+— but `ICFc7` has only 642 settlement days over the whole period, far too
+few to use. B3's curve is quoted out to about c6, so BMF is
+quoted here as a **6-month roll yield (c2 vs c5)** instead:
 
-| Leg | ~months out from c2 | density (filled) | 2024+ | last real print (Aug-2026) |
-|---|---|---|---|---|
-| c4 | ~4.8 | 98.8% | 96.4% | 23-Jul — goes stale for weeks |
-| **c5** | ~7.2 | **99.1%** | **99.2%** | **19-Aug** |
-| c6 | ~9.6 | 96.8% | 98.8% | 14-Aug |
-| c7 | ~12 (the "real" 1yr) | 29.9% | — | 21-May |
+| Leg | ~months out from c2 | real settlement days | verdict |
+|---|---|---|---|
+| c4 | ~4.8 | 2,644 | usable, but nearer than 6m |
+| **c5** | ~7.2 | **2,638** | **used** |
+| c6 | ~9.6 | 2,457 | usable, nearer 10m than 12m |
+| c7 | ~12 (the "real" 1yr) | 642 | **not usable** |
 
-6 months falls between c4 and c5; c5 is the better-behaved side. Switching
-from c6 to c5 also removed a +56% outlier in the history that was a
-stale-deep-leg artifact — the c5 series runs −19.0% to +26.4%.
+6 months falls between c4 and c5; c5 is the closer fit to the tenor actually
+wanted. `ICFc7` is the only leg SETTLE does not rescue, which is why this
+stays a 6-month figure rather than a 1-year one.
 
 The column keeps the shared schema name `Roll_Yield_1yr`; only the dashboard
-labelling says 6-month. If the 1yr point is ever wanted, revisit once `ICFc7`
-has a few more years of prints.
+labelling says 6-month. Revisit if `ICFc7` ever fills in.
 
 **Units.** Quoted in **USD per 60kg bag**, **100 bags per lot**, so the raw
 `c2−c1` spread is USD/bag and is *not* unit-comparable to the cents/lb and
 $/tonne contracts on the other tabs. The `$/Lot` figure (`lot_mult` 100) is
-the comparable one. Carry is a ratio and is comparable as-is, subject to the
-6m-vs-1yr caveat above.
+the comparable one. Roll yield is a ratio and is comparable as-is, subject to
+the 6m-vs-1yr caveat above.
 
-**Known gaps.** `ICFc4` in particular can sit unprinted for weeks (last print
-23-Jul as of 27-Aug-2026) — the forward-curve chart coerces those to `None`
-and bridges the gap with `connectgaps`. `build()` never extrapolates past a
-leg's last real print, so BMF's series can also end a few days behind the
-other eleven commodities. The BMF tab reads its own latest row, so it is
-unaffected; it is simply absent from tabs 1-2 by construction.
+**Coverage.** On SETTLE the series runs 2016-01-13 to date with 2,639 rows,
+4.0% of KC's sessions missing, a longest gap of 7 sessions and **no gap of 10
+sessions or more**. It keeps pace with the other eleven commodities rather
+than lagging them. Range is −12.7% to +25.9%.
 
-### Interpolation cap — read this before trusting BMF or CT
+Note the forward-curve chart still sets `connectgaps=True` — that is correct
+there, because its x-axis is curve position (c1..c5), not time, so it bridges
+a missing leg rather than a missing day.
 
-`_fetch_curve` linearly fills internal gaps in each curve leg. Until Aug-2026
-that fill was **unlimited**, so a thin leg that stopped printing for months got
-a single straight line drawn across the entire dead patch. On a chart that
-reads as a real, calm trend. It is not: it is one interpolation.
+### Price field: SETTLE, not TRDPRC_1
 
-B3 coffee is the worst case. Measured against raw prints:
+The ingest reads **`SETTLE`**, falling back to `TRDPRC_1` only where a leg has
+no settlement. This matters more than it sounds.
 
-| | share of rows where the leg is a REAL print |
-|---|---|
-| `ICFc2` | 74.6% |
-| `ICFc5` | 43.0% |
-| **both legs real (roll yield is genuine)** | **35.5%** |
+`TRDPRC_1` is the last *trade*. An illiquid deferred contract shows nothing on
+a day it did not trade — even though the exchange still published a settlement
+price for it. B3 coffee is the extreme case: on `ICFc5` that is 1,123 trade
+days against **2,638 settlement days** over 2016-2026.
 
-`ICFc5` has gone **187 days** between prints. Uncapped, ~48% of BMF's series
-sat inside a synthetic run of 10+ consecutive invented days, including a
-129-row straight ramp across Mar–Sep 2024.
+| ICF leg | TRDPRC_1 | SETTLE |
+|---|---|---|
+| c1 | 1,700 | 2,645 |
+| c2 | 1,960 | 2,646 |
+| c3 | 1,463 | 2,647 |
+| c4 | 1,507 | 2,644 |
+| **c5** | **1,123** | **2,638** |
+| c6 | 663 | 2,457 |
+| c7 | 148 | 642 |
 
-`INTERP_LIMIT = 5` now caps the fill at five days. Impact of the cap, full
-rebuild:
+With SETTLE, BMF's `c2`/`c5` pair is real on **2,638 days**, the largest gap
+between usable days is **5 days** (median 1), and essentially no interpolation
+is needed. Settlement is also the more correct field on principle: it is what
+the exchange marks to, which is what a roll yield should be measured on.
 
-| | rows lost |
-|---|---|
-| KC, RC, SB, ZC, ZW, KE, W, LCC | 0.0–0.1% |
-| CC | 0.6% |
-| JO | 3.1% |
-| **CT** | **13.8%** |
-| **BMF** | **41.3%** |
+On the liquid contracts the two fields agree to within **0.1-0.6%** on
+average, so nothing is lost there — and SETTLE actually has *more* rows for
+CT, ZW and KE.
 
-For CT and BMF those dropped rows *are* the fabricated stretches. CT was
-quietly affected too and had not been noticed before.
+`ICFc7` stays unusable even on SETTLE (642 days), which is why BMF's roll
+yield remains a 6-month `c2`/`c5` figure rather than a 1-year `c2`/`c7` one.
 
-No tenor rescues BMF — on real prints `c2/c3` is 40%, `c2/c4` 33%, `c2/c5`
-35%, `c2/c6` 20%, and a weekly resample only reaches ~54%. B3's deferred
-coffee simply does not trade most days. **BMF's roll yield is an
-intermittent series, not a daily one**, and the dashboard now draws it with
-visible gaps rather than filling them.
+### Interpolation cap
 
-Because the ingest drops unusable rows entirely, the dashboard reindexes the
-thin series onto `SESSION_DATES` (KC's dates — KC prints every session) via
+`_fetch_curve` fills internal gaps in each leg linearly, capped at
+`INTERP_LIMIT = 5` days. Before the SETTLE switch this cap was load-bearing:
+the fill had been unlimited, so a thin leg that stopped printing for months
+got one straight line drawn across the whole dead patch, which on a chart
+reads as a calm genuine trend. On TRDPRC_1 only 35.5% of BMF's rows had both
+legs real, and ~48% of the series sat inside a synthetic run of 10+ invented
+days — including a 129-row ramp across Mar-Sep 2024.
+
+On SETTLE that problem largely disappears (largest real gap is 5 days), but
+the cap stays as a guard: it is what stops a future thin leg silently
+fabricating a trend again.
+
+Because the ingest drops rows it cannot compute, the dashboard reindexes the
+thinner series onto `SESSION_DATES` (KC's dates — KC prints every session) via
 `on_session_axis()`. Without that, plotly would join the points either side of
-a gap with a straight line and reintroduce exactly the artefact the cap
-removes. Traces on that axis must not set `connectgaps`.
+a gap with a straight line and reintroduce the same artefact. Traces on that
+axis must not set `connectgaps`.
 
 ### KC vs BMF Diff tab (added Aug-2026)
 

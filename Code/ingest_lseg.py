@@ -38,6 +38,8 @@ FULL_START = "2016-01-01"
 # Max consecutive days a curve leg may be linearly filled across. See the
 # note in _fetch_curve — this is what stops thin legs inventing long ramps.
 INTERP_LIMIT = 5
+# Settlement first, last trade only as a fallback — see _pick().
+FIELDS = ["SETTLE", "TRDPRC_1"]
 
 # (key, name, spot_idx, yr1_idx, LSEG continuation root)
 # spot_idx/yr1_idx are 1-based curve positions (c<idx>), carried over
@@ -86,6 +88,34 @@ def _start() -> tuple[str, bool]:
     return FULL_START, False
 
 
+def _pick(df, ric: str) -> pd.Series:
+    """Settlement price for one RIC, falling back to last trade.
+
+    SETTLE, not TRDPRC_1, is the right field here. TRDPRC_1 is the last *trade*,
+    so an illiquid deferred contract shows nothing on a day it did not trade —
+    even though the exchange still published a settlement for it. On B3 coffee
+    that is the difference between a usable series and a mostly-empty one:
+    ICFc5 has 1,123 trade days against 2,638 settlement days over 2016-2026.
+    Settlement is also what the exchange marks to, which is what a roll yield
+    should be measured on. On the liquid contracts the two agree to within
+    0.1-0.6% on average, so this costs nothing there.
+    """
+    cols = df.columns
+    got = pd.Series(dtype="float64")
+    if isinstance(cols, pd.MultiIndex):
+        for fld in ("SETTLE", "TRDPRC_1"):
+            if (ric, fld) in cols:
+                cand = df[(ric, fld)].dropna()
+                got = got.combine_first(cand) if len(got) else cand
+    else:
+        # Single-RIC response: columns are bare field names.
+        for fld in ("SETTLE", "TRDPRC_1"):
+            if fld in cols:
+                cand = df[fld].dropna()
+                got = got.combine_first(cand) if len(got) else cand
+    return got
+
+
 def _fetch_curve(ld, root: str, start: str) -> dict:
     """Fetch c1..c8 for one commodity. Tries a single batched multi-RIC call
     first (fast); falls back to per-RIC fetches for anything missing from
@@ -94,14 +124,13 @@ def _fetch_curve(ld, root: str, start: str) -> dict:
     rics = [f"{root}c{n}" for n in range(1, 9)]
     out = {}
     try:
-        df = ld.get_history(universe=rics, fields=["TRDPRC_1"], start=start, end=TODAY,
+        df = ld.get_history(universe=rics, fields=FIELDS, start=start, end=TODAY,
                              interval="daily", count=10000)
         if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [c[0] for c in df.columns]
             for n, ric in enumerate(rics, start=1):
-                if ric in df.columns:
-                    out[n] = df[ric].dropna()
+                got = _pick(df, ric)
+                if len(got):
+                    out[n] = got
     except Exception as e:
         log.warning(f"  {root}: batch fetch failed ({e}) — falling back to per-RIC")
 
@@ -109,13 +138,13 @@ def _fetch_curve(ld, root: str, start: str) -> dict:
     for n in missing:
         ric = f"{root}c{n}"
         try:
-            d = ld.get_history(universe=[ric], fields=["TRDPRC_1"], start=start, end=TODAY,
+            d = ld.get_history(universe=[ric], fields=FIELDS, start=start, end=TODAY,
                                 interval="daily", count=10000)
             if d is None or d.empty:
                 continue
-            if isinstance(d.columns, pd.MultiIndex):
-                d.columns = [c[0] for c in d.columns]
-            out[n] = d.iloc[:, 0].dropna()
+            got = _pick(d, ric)
+            if len(got):
+                out[n] = got
         except Exception as e:
             log.warning(f"  {ric}: {e}")
 
