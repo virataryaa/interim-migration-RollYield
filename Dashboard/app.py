@@ -1,5 +1,5 @@
 """
-Roll Yield & Roll Cost Monitor — All Commodities
+Roll Yield Monitor — All Commodities
 """
 
 import pandas as pd
@@ -25,6 +25,9 @@ NAVY  = "#0a2463"
 BLACK = "#1d1d1f"
 _BASE = Path(__file__).parent.parent / "Database"
 
+# lot_mult / rolls_yr are only read by the BMF tab now that the Roll Cost tab
+# is gone; kept for the other entries so the config stays uniform and a future
+# per-commodity cost view doesn't have to re-derive them.
 COMM_CONFIG = {
     "KC":  {"name": "Arabica",      "color": "#0a2463", "lot_mult": 375,  "rolls_yr": 5},
     "RC":  {"name": "Robusta",      "color": "#8b1a00", "lot_mult": 10,   "rolls_yr": 5},
@@ -38,15 +41,15 @@ COMM_CONFIG = {
     "KE":  {"name": "KC Wheat",     "color": "#795548", "lot_mult": 50,   "rolls_yr": 5},
     "JO":  {"name": "Orange Juice", "color": "#e67e22", "lot_mult": 150,  "rolls_yr": 5},
     # B3/BM&F Arabica (ICF): quoted USD per 60kg bag, 100 bags per lot,
-    # H/K/N/U/Z like KC. Spread is USD/bag — the $/Lot column is what makes
-    # it comparable to the cents/lb and $/tonne contracts above.
+    # H/K/N/U/Z like KC. Its c2-c1 spread is USD/bag, so the BMF tab shows a
+    # $/Lot figure (lot_mult 100) to put it in comparable money.
     "BMF": {"name": "BMF Arabica",  "color": "#00897b", "lot_mult": 100,  "rolls_yr": 5},
     # carry point is c5 (~6m), not c7 (~1yr) - B3's curve is only liquid to ~c5
 }
 
 # BMF is quoted in USD/60kg-bag on a 6-month carry, not a 1yr one like the
 # rest, so it gets its own tab and is excluded from the cross-commodity
-# selectors in tabs 1 and 2.
+# Roll Yield tab.
 BMF    = "BMF"
 COMMS  = [k for k in COMM_CONFIG if k != BMF]
 NAMES  = {k: v["name"] for k, v in COMM_CONFIG.items()}
@@ -117,7 +120,7 @@ df, is_demo = load_data()
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(
     "<h2 style='font-family:\"Playfair Display\",Georgia,serif;color:#0a2463;"
-    "font-weight:400;letter-spacing:-.01em;margin-bottom:2px'>Roll Yield & Roll Cost Monitor</h2>",
+    "font-weight:400;letter-spacing:-.01em;margin-bottom:2px'>Roll Yield Monitor</h2>",
     unsafe_allow_html=True,
 )
 if is_demo:
@@ -149,9 +152,7 @@ start_d, end_d = date_range
 df_fil = df[(df["Date"].dt.date >= start_d) & (df["Date"].dt.date <= end_d)]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-ry_tab, rc_tab, bmf_tab, diff_tab = st.tabs(
-    ["Roll Yield", "Roll Cost", "BMF Arabica", "KC vs BMF Diff"]
-)
+ry_tab, bmf_tab, diff_tab = st.tabs(["Roll Yield", "BMF Arabica", "KC vs BMF Diff"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -349,174 +350,7 @@ with ry_tab:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — ROLL COST
-# ═══════════════════════════════════════════════════════════════════════════════
-with rc_tab:
-
-    # Compute roll spread (c2 - c1) for all rows
-    df_rc = df_fil.copy()
-    df_rc["roll_spread"] = df_rc["c2"] - df_rc["c1"]
-    df_rc["roll_pct"]    = (df_rc["roll_spread"] / df_rc["c1"] * 100).round(3)
-
-    latest_rc   = df_rc[df_rc["Date"] == df_rc["Date"].max()].set_index("Commodity")
-
-    # ── RC SECTION 1 — Roll Spread over time ──────────────────────────────────
-    st.markdown(lbl("Roll Spread (c2 − c1) Over Time — Positive = Contango, Negative = Backwardation"), unsafe_allow_html=True)
-
-    fig_rc_line = go.Figure()
-    for comm in sel_comms:
-        s = df_rc[df_rc["Commodity"] == comm].sort_values("Date")
-        fig_rc_line.add_trace(go.Scatter(
-            x=s["Date"], y=s["roll_spread"].round(2),
-            name=NAMES[comm], mode="lines",
-            line=dict(color=COLORS[comm], width=1.8),
-            hovertemplate=f"<b>{NAMES[comm]}</b>  %{{x|%d %b %Y}}  %{{y:.2f}}<extra></extra>",
-        ))
-    fig_rc_line.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
-    fig_rc_line.update_layout(
-        height=360,
-        xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-        yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK), title="c2 − c1"),
-        legend=dict(orientation="h", y=1.02, x=0, font=dict(size=8, color=BLACK), bgcolor="rgba(255,255,255,0.7)"),
-        margin=dict(t=10, b=10, l=4, r=4), **_D,
-    )
-    st.plotly_chart(fig_rc_line, use_container_width=True)
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    # ── RC SECTION 2 — Snapshot table + Seasonal bar ──────────────────────────
-    rc_col1, rc_col2 = st.columns(2)
-
-    with rc_col1:
-        st.markdown(lbl(f"Current Roll Cost Snapshot · {df_rc['Date'].max().strftime('%d/%m/%Y')}"), unsafe_allow_html=True)
-        snap_rows = []
-        for comm in COMMS:
-            if comm not in latest_rc.index:
-                continue
-            spread  = latest_rc.loc[comm, "roll_spread"]
-            pct     = latest_rc.loc[comm, "roll_pct"]
-            mult    = COMM_CONFIG[comm]["lot_mult"]
-            rolls   = COMM_CONFIG[comm]["rolls_yr"]
-            dol_lot = spread * mult
-            ann_lot = dol_lot * rolls
-            regime  = "Contango" if spread > 0 else "Backwardation"
-            snap_rows.append({
-                "Commodity": NAMES[comm],
-                "Spread":    f"{spread:+.2f}",
-                "Spread %":  f"{pct:+.2f}%",
-                "$/Lot":     f"${dol_lot:+,.0f}",
-                "Ann $/Lot": f"${ann_lot:+,.0f}",
-                "Regime":    regime,
-                "_spread":   spread,
-            })
-        snap_df = pd.DataFrame(snap_rows).sort_values("_spread", ascending=False).reset_index(drop=True)
-
-        regime_colors = [("#8b0000" if r == "Contango" else "#1a6b1a") for r in snap_df["Regime"]]
-
-        fig_snap = go.Figure(go.Table(
-            columnwidth=[90, 55, 60, 65, 75, 80],
-            header=dict(
-                values=["Commodity", "Spread", "Spread %", "$/Lot", "Ann $/Lot", "Regime"],
-                fill_color=NAVY, font=dict(color="white", size=9),
-                align="center", height=28,
-            ),
-            cells=dict(
-                values=[
-                    snap_df["Commodity"], snap_df["Spread"], snap_df["Spread %"],
-                    snap_df["$/Lot"], snap_df["Ann $/Lot"], snap_df["Regime"],
-                ],
-                fill_color=[["white" if i % 2 == 0 else "#f5f5f7" for i in range(len(snap_df))]],
-                font=dict(
-                    color=[
-                        [BLACK]*len(snap_df),
-                        [("#8b0000" if v > 0 else "#1a6b1a") for v in snap_df["_spread"]],
-                        [("#8b0000" if v > 0 else "#1a6b1a") for v in snap_df["_spread"]],
-                        [("#8b0000" if v > 0 else "#1a6b1a") for v in snap_df["_spread"]],
-                        [("#8b0000" if v > 0 else "#1a6b1a") for v in snap_df["_spread"]],
-                        regime_colors,
-                    ], size=9,
-                ),
-                align="center", height=24,
-            ),
-        ))
-        fig_snap.update_layout(height=380, margin=dict(t=0, b=0, l=0, r=0), **_D)
-        st.plotly_chart(fig_snap, use_container_width=True)
-
-    with rc_col2:
-        st.markdown(lbl("Seasonal Roll Spread — Avg by Month Across All Years"), unsafe_allow_html=True)
-        rc_seas_comm = st.selectbox(
-            "Commodity", COMMS,
-            format_func=lambda x: f"{x} — {NAMES[x]}", key="rc_seas_comm",
-        )
-        seas = df_rc[df_rc["Commodity"] == rc_seas_comm].copy()
-        seas["Month"] = seas["Date"].dt.month
-        seas_avg = seas.groupby("Month")["roll_spread"].mean().reindex(range(1, 13))
-        colors_seas = ["#8b0000" if v > 0 else "#1a6b1a" for v in seas_avg.fillna(0)]
-        fig_seas = go.Figure(go.Bar(
-            x=MONTHS, y=seas_avg.values.round(2),
-            marker_color=colors_seas,
-            text=[f"{v:.2f}" if not np.isnan(v) else "" for v in seas_avg.values],
-            textposition="outside", textfont=dict(size=8, color=BLACK),
-            hovertemplate="<b>%{x}</b><br>Avg spread: %{y:.2f}<extra></extra>",
-        ))
-        fig_seas.add_hline(y=0, line_dash="dot", line_color="#aaaaaa", line_width=1)
-        fig_seas.update_layout(
-            height=340,
-            xaxis=dict(showgrid=False, tickfont=dict(size=9, color=BLACK)),
-            yaxis=dict(showgrid=True, gridcolor="#f0f0f0", tickfont=dict(size=9, color=BLACK), title="Avg c2−c1"),
-            margin=dict(t=10, b=10, l=4, r=4), **_D,
-        )
-        st.plotly_chart(fig_seas, use_container_width=True)
-
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    # ── RC SECTION 3 — Roll Cost Heatmap ──────────────────────────────────────
-    rc_hm_comm = st.selectbox(
-        "Commodity for Heatmap", COMMS,
-        format_func=lambda x: f"{x} — {NAMES[x]}", key="rc_hm_comm",
-    )
-    st.markdown(lbl(f"Roll Spread Heatmap · {NAMES[rc_hm_comm]} · Monthly Avg (c2−c1)"), unsafe_allow_html=True)
-
-    hm_rc = df_rc[df_rc["Commodity"] == rc_hm_comm].copy()
-    hm_rc["Year"]  = hm_rc["Date"].dt.year
-    hm_rc["Month"] = hm_rc["Date"].dt.month
-    rc_pivot = (
-        hm_rc.groupby(["Year", "Month"])["roll_spread"]
-        .mean().reset_index()
-        .pivot(index="Year", columns="Month", values="roll_spread")
-    )
-
-    if not rc_pivot.empty:
-        rc_pivot.columns = [MONTHS[int(m) - 1] for m in rc_pivot.columns]
-        rc_pivot = rc_pivot.sort_index(ascending=False)
-        z_rc      = rc_pivot.to_numpy(dtype='float64', na_value=np.nan).round(2)
-        years_rc  = [str(y) for y in rc_pivot.index]
-        months_rc = list(rc_pivot.columns)
-        text_rc   = [[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in z_rc]
-
-        fig_rc_hm = go.Figure(go.Heatmap(
-            z=z_rc, x=months_rc, y=years_rc,
-            text=text_rc, texttemplate="%{text}",
-            textfont=dict(size=8, color=BLACK),
-            colorscale=[[0.0,"#1a6b1a"],[0.4,"#d4edda"],[0.5,"#ffffff"],[0.6,"#f5c6cb"],[1.0,"#8b0000"]],
-            zmid=0,
-            colorbar=dict(
-                title=dict(text="c2−c1", font=dict(size=9, color=BLACK)),
-                tickfont=dict(size=8, color=BLACK), thickness=12, len=0.8,
-            ),
-            hoverongaps=False,
-            hovertemplate="<b>%{y} · %{x}</b><br>Avg Spread: %{z:.2f}<extra></extra>",
-        ))
-        fig_rc_hm.update_layout(
-            height=max(300, len(years_rc) * 28),
-            xaxis=dict(side="top", tickfont=dict(size=9, color=BLACK), showgrid=False),
-            yaxis=dict(tickfont=dict(size=9, color=BLACK), showgrid=False),
-            margin=dict(t=40, b=10, l=60, r=10), **_D,
-        )
-        st.plotly_chart(fig_rc_hm, use_container_width=True)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — BMF ARABICA (B3/BM&F, LSEG continuation root ICF)
+# TAB 2 — BMF ARABICA (B3/BM&F, LSEG continuation root ICF)
 # ═══════════════════════════════════════════════════════════════════════════════
 with bmf_tab:
 
@@ -680,7 +514,7 @@ with bmf_tab:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — KC vs BMF DIFF
+# TAB 3 — KC vs BMF DIFF
 # ═══════════════════════════════════════════════════════════════════════════════
 # The two contracts are the same physical commodity on the same five months, so
 # once BMF is converted to US cents/lb the difference is readable as a Brazil

@@ -16,9 +16,11 @@ Arabica (BMF).
   positions for Spot/OneYr **except RC and JO** (see below).
 - **`Database/roll_yield_data.parquet`** — `Date, Commodity, Spot, OneYr,
   Roll_Yield_1yr, c1..c8`, full history from 2016.
-- **`Dashboard/app.py`** — pure parquet consumer, no ICE dependency. Four
-  tabs: Roll Yield and Roll Cost (both copied verbatim from the ICE source),
-  plus **BMF Arabica** and **KC vs BMF Diff**, added Aug-2026.
+- **`Dashboard/app.py`** — pure parquet consumer, no ICE dependency. Three
+  tabs: **Roll Yield** (copied verbatim from the ICE source), plus **BMF
+  Arabica** and **KC vs BMF Diff**, added Aug-2026. The ICE source's Roll
+  Cost tab was dropped Aug-2026 — the BMF tab still carries a roll-cost
+  readout for that contract.
 - **`Database/fx_brl.parquet`** — `Date, USDBRL`. Written by the same ingest;
   consumed only by the diff tab, which treats it as optional.
 - **`Automater/`** — `run.bat` (daily ingest + git push + email),
